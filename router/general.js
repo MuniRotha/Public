@@ -1,7 +1,6 @@
 const express = require("express");
 const axios = require("axios");
 let books = require("./booksdb.js");
-let isValid = require("./auth_users.js").isValid;
 let users = require("./auth_users.js").users;
 const public_users = express.Router();
 
@@ -9,12 +8,18 @@ const doesExist = (username) => {
   return users.some((user) => user.username === username);
 };
 
-const getAllBooks = () => {
-  return books;
+// Build the server's own base URL so Axios can call the data endpoints below
+const baseUrl = (req) => `${req.protocol}://${req.get("host")}`;
+
+const sendError = (res, e) => {
+  return res
+    .status(e.response?.status || 500)
+    .json(e.response?.data || { message: "Internal server error." });
 };
 
-
-
+/* ------------------------------------------------------------------ */
+/* Register                                                            */
+/* ------------------------------------------------------------------ */
 public_users.post("/register", (req, res) => {
   const username = req.body.username;
   const password = req.body.password;
@@ -31,148 +36,96 @@ public_users.post("/register", (req, res) => {
   }
 });
 
+/* ------------------------------------------------------------------ */
+/* Data endpoints (plain lookups in booksdb.js, called through Axios)  */
+/* ------------------------------------------------------------------ */
+public_users.get("/data/books", (req, res) => {
+  return res.status(200).json(books);
+});
 
-public_users.post("/login", (req, res) => {
-  const { username, password } = req.body;
-
-  if (!username || !password) {
-    return res.status(400).json({ message: "Missing username or password" });
+public_users.get("/data/isbn/:isbn", (req, res) => {
+  const book = books[req.params.isbn];
+  if (book) {
+    return res.status(200).json(book);
   }
-
-  const user = users.find(
-    (user) => user.username === username && user.password === password
-  );
-
-  if (user) {
-    return res.status(200).json({ message: "Login successful!" });
-  } else {
-    return res.status(401).json({ message: "Invalid username or password" });
-  }
+  return res.status(404).json({ message: "ISBN not found." });
 });
 
-
-// Get the book list available in the shop
-public_users.get("/", async (req, res) => {
-  try {
-    const allBooks = await getAllBooks();
-    return res.status(200).send(JSON.stringify(allBooks, null, 4));
-  } catch (e) {
-    res.status(500).send(e);
-  }
-});
-
-const getBooksByAuthor = (author) => {
-  return new Promise((resolve, reject) => {
-    const matchingBooks = Object.values(books).filter(
-      (book) => book.author.toLowerCase() === author.toLowerCase()
-    );
-    if (matchingBooks.length > 0) {
-      resolve(matchingBooks);
-    } else {
-      reject("No books found by that author.");
-    }
-  });
-};
-
-public_users.get("/author/:author", (req, res) => {
-  const author = req.params.author;
-
-  getBooksByAuthor(author)
-    .then((matchingBooks) => {
-      return res.status(200).send(JSON.stringify(matchingBooks, null, 4));
-    })
-    .catch((error) => {
-      return res.status(404).json({ message: error });
-    });
-});
-const getBooksByTitle = (title) => {
-  return new Promise((resolve, reject) => {
-    const matchingBooks = Object.values(books).filter(
-      (book) => book.title.toLowerCase() === title.toLowerCase()
-    );
-    if (matchingBooks.length > 0) {
-      resolve(matchingBooks);
-    } else {
-      reject("No books found with that title.");
-    }
-  });
-};
-
-public_users.get("/title/:title", (req, res) => {
-  const title = req.params.title;
-
-  getBooksByTitle(title)
-    .then((matchingBooks) => {
-      return res.status(200).send(JSON.stringify(matchingBooks, null, 4));
-    })
-    .catch((error) => {
-      return res.status(404).json({ message: error });
-    });
-});
-
-const getBookByISBN = (isbn) => {
-  return new Promise((resolve, reject) => {
-    const book = books[isbn];
-    if (book) {
-      resolve(book);
-    } else {
-      reject("ISBN not found.");
-    }
-  });
-};
-
-public_users.get("/isbn/:isbn", (req, res) => {
-  const targetISBN = req.params.isbn;
-
-  getBookByISBN(targetISBN)
-    .then((book) => {
-      return res.status(200).json(book);
-    })
-    .catch((error) => {
-      return res.status(404).json({ message: error });
-    });
-});
-
-// Get book details based on ISBN
-public_users.get("/isbn/:isbn", async (req, res) => {
-  const targetISBN = parseInt(req.params.isbn);
-  const targetBook = await books[targetISBN];
-  if (!targetBook) {
-    return res.status(404).json({ message: "ISBN not found." });
-  } else {
-    return res.status(200).json(targetBook);
-  }
-});
-
-// Get book details based on author
-public_users.get("/author/:author", async (req, res) => {
-  // get array of matching book objects
-  const matchingBooks = Object.values(await books).filter(
+public_users.get("/data/author/:author", (req, res) => {
+  const matchingBooks = Object.values(books).filter(
     (book) => book.author.toLowerCase() === req.params.author.toLowerCase()
   );
   if (matchingBooks.length > 0) {
-    return res.status(200).send(JSON.stringify(matchingBooks, null, 4));
-  } else {
-    return res.status(404).json({ message: "No books by that author." });
+    return res.status(200).json(matchingBooks);
   }
+  return res.status(404).json({ message: "No books found by that author." });
 });
 
-// Get all books based on title
-public_users.get("/title/:title", async (req, res) => {
-  const matchingTitle = Object.values(await books).filter(
+public_users.get("/data/title/:title", (req, res) => {
+  const matchingBooks = Object.values(books).filter(
     (book) => book.title.toLowerCase() === req.params.title.toLowerCase()
-  )[0];
-  if (matchingTitle) {
-    return res.status(200).json(matchingTitle);
-  } else {
-    return res.status(404).json({ message: "Title not found." });
+  );
+  if (matchingBooks.length > 0) {
+    return res.status(200).json(matchingBooks);
+  }
+  return res.status(404).json({ message: "No books found with that title." });
+});
+
+/* ------------------------------------------------------------------ */
+/* Public routes (all four use Axios)                                  */
+/* ------------------------------------------------------------------ */
+
+// Get all books (async/await with Axios)
+public_users.get("/", async (req, res) => {
+  try {
+    const response = await axios.get(`${baseUrl(req)}/data/books`);
+    return res.status(200).send(JSON.stringify(response.data, null, 4));
+  } catch (e) {
+    return sendError(res, e);
   }
 });
 
-//  Get book review
+// Get book by ISBN (Promise callbacks with Axios)
+public_users.get("/isbn/:isbn", (req, res) => {
+  axios
+    .get(`${baseUrl(req)}/data/isbn/${encodeURIComponent(req.params.isbn)}`)
+    .then((response) => {
+      return res.status(200).json(response.data);
+    })
+    .catch((e) => {
+      return sendError(res, e);
+    });
+});
+
+// Get books by author (async/await with Axios)
+public_users.get("/author/:author", async (req, res) => {
+  try {
+    const response = await axios.get(
+      `${baseUrl(req)}/data/author/${encodeURIComponent(req.params.author)}`
+    );
+    return res.status(200).send(JSON.stringify(response.data, null, 4));
+  } catch (e) {
+    return sendError(res, e);
+  }
+});
+
+// Get books by title (Promise callbacks with Axios)
+public_users.get("/title/:title", (req, res) => {
+  axios
+    .get(`${baseUrl(req)}/data/title/${encodeURIComponent(req.params.title)}`)
+    .then((response) => {
+      return res.status(200).send(JSON.stringify(response.data, null, 4));
+    })
+    .catch((e) => {
+      return sendError(res, e);
+    });
+});
+
+/* ------------------------------------------------------------------ */
+/* Get book review                                                     */
+/* ------------------------------------------------------------------ */
 public_users.get("/review/:isbn", function (req, res) {
-  const targetISBN = req.params.isbn;
-  const targetBook = books[targetISBN];
+  const targetBook = books[req.params.isbn];
   if (targetBook) {
     return res.status(200).send(JSON.stringify(targetBook.reviews, null, 4));
   } else {
